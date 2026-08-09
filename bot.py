@@ -9,6 +9,29 @@ import zlib
 import base64
 import re
 from pathlib import Path
+from flask import Flask
+from threading import Thread
+
+# ============================================================
+# FLASK WEB SERVER (para sa UptimeRobot)
+# ============================================================
+web_app = Flask('')
+
+@web_app.route('/')
+def home():
+    return "✅ Bot is alive! Yoroda Decryptor is running."
+
+@web_app.route('/health')
+def health():
+    return "OK", 200
+
+def run_web():
+    web_app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.daemon = True
+    t.start()
 
 # ============================================================
 # BOT CONFIG
@@ -16,17 +39,10 @@ from pathlib import Path
 TOKEN = "8658169058:AAHC1gGtFhM_tWmagQjQ3Fvsp_Y_5YzAMdg"
 API_URL = f"https://api.telegram.org/bot{TOKEN}"
 
-# ============================================================
-# PROXY CONFIG (Optional)
-# ============================================================
 PROXY = None
-# PROXY = {
-#     "http": "socks5://127.0.0.1:9050",
-#     "https": "socks5://127.0.0.1:9050"
-# }
 
 # ============================================================
-# DECRYPTION TOOL
+# DECRYPTION TOOL (same as before)
 # ============================================================
 
 LUA_MAGIC_53 = b'\x1bLua\x53'
@@ -517,6 +533,24 @@ def process_lua(zip_path, name, raw, out_dir):
     return result
 
 # ============================================================
+# NEW: CREATE ZIP PACKAGE
+# ============================================================
+
+def create_zip_package(output_dir, file_name):
+    """Create a ZIP file containing all decrypted files"""
+    zip_path = os.path.join(output_dir, f"{file_name}_decrypted.zip")
+    
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(output_dir):
+            for file in files:
+                if file.endswith('_decrypted.lua') or file.endswith('_strings.txt') or file.endswith('.luac'):
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, output_dir)
+                    zipf.write(file_path, arcname)
+    
+    return zip_path
+
+# ============================================================
 # TELEGRAM BOT FUNCTIONS
 # ============================================================
 
@@ -578,7 +612,7 @@ def download_file(file_id):
     return None
 
 def process_apk(apk_data, file_name):
-    result = {'ok': False, 'files': [], 'error': ''}
+    result = {'ok': False, 'files': [], 'error': '', 'zip_path': None}
     try:
         temp_dir = tempfile.mkdtemp()
         apk_path = os.path.join(temp_dir, file_name)
@@ -596,15 +630,14 @@ def process_apk(apk_data, file_name):
             try:
                 lua_result = process_lua(zip_path, name, raw, out_dir)
                 if lua_result.get('ok'):
-                    result['files'].append({
-                        'name': name,
-                        'path': os.path.join(out_dir, name + '_decrypted.lua')
-                    })
+                    result['files'].append(name)
             except Exception as e:
                 print(f"Error processing {name}: {e}")
         if result['files']:
             result['ok'] = True
             result['output_dir'] = out_dir
+            # Create ZIP package
+            result['zip_path'] = create_zip_package(out_dir, apk_name)
         else:
             result['error'] = "No files could be decrypted"
     except Exception as e:
@@ -612,7 +645,7 @@ def process_apk(apk_data, file_name):
     return result
 
 def process_lua_file(lua_data, file_name):
-    result = {'ok': False, 'files': [], 'error': ''}
+    result = {'ok': False, 'files': [], 'error': '', 'zip_path': None}
     try:
         temp_dir = tempfile.mkdtemp()
         lua_path = os.path.join(temp_dir, file_name)
@@ -625,13 +658,12 @@ def process_lua_file(lua_data, file_name):
         if lua_result.get('ok'):
             for f in os.listdir(out_dir):
                 if f.endswith('_decrypted.lua') or f.endswith('_strings.txt'):
-                    result['files'].append({
-                        'name': f,
-                        'path': os.path.join(out_dir, f)
-                    })
+                    result['files'].append(f)
             if result['files']:
                 result['ok'] = True
                 result['output_dir'] = out_dir
+                # Create ZIP package
+                result['zip_path'] = create_zip_package(out_dir, lua_name)
             else:
                 result['error'] = "No decrypted files generated"
         else:
@@ -648,6 +680,10 @@ print("Yoroda Decryptor Bot is running")
 print("Bot: @Yoroda_Bot")
 print("Response time: < 1 second")
 print("Waiting for messages...")
+
+# I-start ang Flask server (para sa UptimeRobot)
+keep_alive()
+print("✅ Web server started on port 8080")
 
 last_update_id = 0
 error_count = 0
@@ -727,21 +763,15 @@ while True:
                                 result = process_lua_file(file_data, file_name)
                             
                             if result.get('ok'):
-                                send_message(chat_id, f"Decryption complete! {len(result['files'])} file(s)")
+                                zip_path = result.get('zip_path')
                                 
-                                for file_info in result['files']:
-                                    file_path = file_info['path']
-                                    file_name2 = file_info['name']
-                                    file_size2 = os.path.getsize(file_path) / 1024
-                                    
-                                    if file_size2 > 50 * 1024:
-                                        send_message(chat_id, f"{file_name2} is too large.")
-                                        continue
-                                    
-                                    send_document(chat_id, file_path, f"{file_name2} ({file_size2:.1f} KB)")
-                                    time.sleep(0.2)
-                                
-                                send_message(chat_id, "All files sent.")
+                                if zip_path and os.path.exists(zip_path):
+                                    zip_size = os.path.getsize(zip_path) / 1024
+                                    send_message(chat_id, f"Decryption complete! {len(result['files'])} file(s) packaged.")
+                                    send_document(chat_id, zip_path, f"Decrypted files ({zip_size:.1f} KB)")
+                                    send_message(chat_id, "All files sent.")
+                                else:
+                                    send_message(chat_id, "Decryption complete but no files to send.")
                                 
                                 if result.get('output_dir'):
                                     shutil.rmtree(result['output_dir'], ignore_errors=True)
