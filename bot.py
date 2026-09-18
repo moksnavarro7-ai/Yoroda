@@ -36,7 +36,7 @@ def keep_alive():
 # ============================================================
 # BOT CONFIG
 # ============================================================
-TOKEN = "8896367346:AAFlh0vJO3zK5WoFu5FPuU89uM1rYuekVdM"
+TOKEN = "8834414742:AAGk3wi14ySP_bythfkZ_oWJv1YqiO6lo8Y"
 API_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 PROXY = None
